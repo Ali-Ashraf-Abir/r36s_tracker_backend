@@ -10,7 +10,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/r36s-tracker';
 
@@ -793,7 +793,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Start server
-app.listen(PORT,'0.0.0.0', () => {
+app.listen(PORT, () => {
   console.log(`🚀 Backend server running on port ${PORT}`);
   console.log(`📊 MongoDB: ${MONGODB_URI}`);
   console.log(`💾 Uploads: ${UPLOAD_DIR}`);
