@@ -793,11 +793,11 @@ app.get('/api/health', (req, res) => {
 });
 
 // Start server
-// app.listen(PORT, () => {
-//   console.log(`🚀 Backend server running on port ${PORT}`);
-//   console.log(`📊 MongoDB: ${MONGODB_URI}`);
-//   console.log(`💾 Uploads: ${UPLOAD_DIR}`);
-// });
+app.listen(PORT, () => {
+  console.log(`🚀 Backend server running on port ${PORT}`);
+  console.log(`📊 MongoDB: ${MONGODB_URI}`);
+  console.log(`💾 Uploads: ${UPLOAD_DIR}`);
+});
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
@@ -806,4 +806,4 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-module.exports = app;
+// module.exports = app;
