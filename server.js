@@ -781,6 +781,296 @@ app.delete('/api/backup/:backupId', authenticateToken, async (req, res) => {
   }
 });
 
+// ==================== BATCH SYNC ENDPOINTS ====================
+
+// Batch start sessions
+app.post('/api/gameplay/batch/start', authenticateApiKey, async (req, res) => {
+  try {
+    const { sessions } = req.body;
+
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      return res.status(400).json({ error: 'sessions array is required' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const session of sessions) {
+      const { deviceId, gameName, platform, core, timestamp } = session;
+
+      if (!deviceId || !gameName) {
+        errors.push({ session, error: 'deviceId and gameName are required' });
+        continue;
+      }
+
+      try {
+        const startTime = timestamp ? new Date(timestamp * 1000) : new Date();
+        const date = startTime.toISOString().split('T')[0];
+
+        // Check if session already exists
+        let gameSession = await GameplaySession.findOne({
+          userId: req.user._id,
+          deviceId,
+          gameName,
+          isActive: true
+        });
+
+        if (gameSession) {
+          // Update existing session
+          gameSession.lastPing = startTime;
+          await gameSession.save();
+          results.push({ session, status: 'updated', sessionId: gameSession._id });
+        } else {
+          // Create new session
+          gameSession = new GameplaySession({
+            userId: req.user._id,
+            deviceId,
+            gameName,
+            platform,
+            core,
+            startTime,
+            date,
+            isActive: true,
+            lastPing: startTime
+          });
+          await gameSession.save();
+          results.push({ session, status: 'created', sessionId: gameSession._id });
+        }
+
+        // Update device last seen
+        await Device.findOneAndUpdate(
+          { userId: req.user._id, deviceId },
+          { lastSeen: startTime },
+          { upsert: true }
+        );
+      } catch (err) {
+        errors.push({ session, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: results.length,
+      errors: errors.length,
+      results,
+      errors
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch end sessions
+app.post('/api/gameplay/batch/end', authenticateApiKey, async (req, res) => {
+  try {
+    const { sessions } = req.body;
+
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      return res.status(400).json({ error: 'sessions array is required' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const session of sessions) {
+      const { deviceId, gameName, timestamp } = session;
+
+      if (!deviceId || !gameName) {
+        errors.push({ session, error: 'deviceId and gameName are required' });
+        continue;
+      }
+
+      try {
+        const gameSession = await GameplaySession.findOne({
+          userId: req.user._id,
+          deviceId,
+          gameName,
+          isActive: true
+        });
+
+        if (!gameSession) {
+          errors.push({ session, error: 'No active session found' });
+          continue;
+        }
+
+        const endTime = timestamp ? new Date(timestamp * 1000) : new Date();
+        const duration = Math.floor((endTime - gameSession.startTime) / 1000);
+
+        gameSession.endTime = endTime;
+        gameSession.duration = duration;
+        gameSession.isActive = false;
+        await gameSession.save();
+
+        results.push({ session, status: 'ended', sessionId: gameSession._id, duration });
+      } catch (err) {
+        errors.push({ session, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: results.length,
+      errors: errors.length,
+      results,
+      errors
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch ping sessions
+app.post('/api/gameplay/batch/ping', authenticateApiKey, async (req, res) => {
+  try {
+    const { sessions } = req.body;
+
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      return res.status(400).json({ error: 'sessions array is required' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const session of sessions) {
+      const { deviceId, gameName, timestamp } = session;
+
+      if (!deviceId || !gameName) {
+        errors.push({ session, error: 'deviceId and gameName are required' });
+        continue;
+      }
+
+      try {
+        const lastPing = timestamp ? new Date(timestamp * 1000) : new Date();
+        
+        const result = await GameplaySession.updateOne(
+          {
+            userId: req.user._id,
+            deviceId,
+            gameName,
+            isActive: true
+          },
+          {
+            lastPing
+          }
+        );
+
+        if (result.modifiedCount > 0) {
+          results.push({ session, status: 'updated' });
+        } else {
+          errors.push({ session, error: 'Session not found or not active' });
+        }
+      } catch (err) {
+        errors.push({ session, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      processed: results.length,
+      errors: errors.length,
+      results,
+      errors
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch upload backups (for multiple cached backup files)
+app.post('/api/backup/batch', authenticateApiKey, upload.array('backups', 10), async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    if (!deviceId) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const file of req.files) {
+      try {
+        const backup = new SaveBackup({
+          userId: req.user._id,
+          deviceId,
+          backupDate: new Date(),
+          filePath: file.path,
+          fileName: file.filename,
+          fileSize: file.size
+        });
+
+        await backup.save();
+        results.push({ fileName: file.originalname, backupId: backup._id });
+      } catch (err) {
+        errors.push({ fileName: file.originalname, error: err.message });
+        // Clean up file if save failed
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      uploaded: results.length,
+      errors: errors.length,
+      results,
+      errors
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get sync status (check what's cached vs synced)
+app.get('/api/sync/status', authenticateApiKey, async (req, res) => {
+  try {
+    const { deviceId } = req.query;
+
+    if (!deviceId) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    // Get active sessions for this device
+    const activeSessions = await GameplaySession.find({
+      userId: req.user._id,
+      deviceId,
+      isActive: true
+    });
+
+    // Get recent sessions (last 24 hours)
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentSessions = await GameplaySession.find({
+      userId: req.user._id,
+      deviceId,
+      startTime: { $gte: yesterday }
+    }).sort({ startTime: -1 });
+
+    // Get recent backups (last 7 days)
+    const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const recentBackups = await SaveBackup.find({
+      userId: req.user._id,
+      deviceId,
+      backupDate: { $gte: lastWeek }
+    }).sort({ backupDate: -1 });
+
+    res.json({
+      success: true,
+      deviceId,
+      activeSessions: activeSessions.length,
+      recentSessions: recentSessions.length,
+      recentBackups: recentBackups.length,
+      lastBackup: recentBackups.length > 0 ? recentBackups[0].backupDate : null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==================== UTILITY ENDPOINTS ====================
 
 // Health check
