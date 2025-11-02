@@ -941,7 +941,7 @@ app.post('/api/gameplay/batch/ping', authenticateApiKey, async (req, res) => {
 
       try {
         const lastPing = timestamp ? new Date(timestamp * 1000) : new Date();
-        
+
         const result = await GameplaySession.updateOne(
           {
             userId: req.user._id,
@@ -1071,6 +1071,78 @@ app.get('/api/sync/status', authenticateApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/gameplay/session', authenticateApiKey, async (req, res) => {
+  try {
+    const { deviceId, gameName, platform, core, startTime, endTime } = req.body;
+
+    if (!deviceId || !gameName) {
+      return res.status(400).json({ error: 'deviceId and gameName required' });
+    }
+
+    const start = startTime ? new Date(startTime * 1000) : new Date();
+
+    // If endTime provided, create completed session
+    if (endTime) {
+      const end = new Date(endTime * 1000);
+      const duration = Math.floor((end - start) / 1000);
+      const date = start.toISOString().split('T')[0];
+
+      const session = new GameplaySession({
+        userId: req.user._id,
+        deviceId,
+        gameName,
+        platform,
+        core,
+        startTime: start,
+        endTime: end,
+        duration,
+        date,
+        isActive: false
+      });
+
+      await session.save();
+      return res.json({ success: true, session: session._id, duration });
+    }
+
+    // Otherwise start/update active session
+    const date = start.toISOString().split('T')[0];
+
+    let session = await GameplaySession.findOne({
+      userId: req.user._id,
+      deviceId,
+      gameName,
+      isActive: true
+    });
+
+    if (session) {
+      session.lastPing = start;
+      await session.save();
+    } else {
+      session = new GameplaySession({
+        userId: req.user._id,
+        deviceId,
+        gameName,
+        platform,
+        core,
+        startTime: start,
+        date,
+        isActive: true,
+        lastPing: start
+      });
+      await session.save();
+    }
+
+    await Device.findOneAndUpdate(
+      { userId: req.user._id, deviceId },
+      { lastSeen: start },
+      { upsert: true }
+    );
+
+    res.json({ success: true, session: session._id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // ==================== UTILITY ENDPOINTS ====================
 
 // Health check
